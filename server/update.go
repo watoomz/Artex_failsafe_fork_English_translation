@@ -143,7 +143,7 @@ func (h *updateHub) begin(version string) bool {
 		return false
 	}
 	h.running = true
-	h.cur = updateProgress{Phase: selfupdate.PhaseDownload, Percent: 0, Message: "准备中…", Version: version}
+	h.cur = updateProgress{Phase: selfupdate.PhaseDownload, Percent: 0, Message: "preparing...", Version: version}
 	h.fanout(h.cur)
 	return true
 }
@@ -154,9 +154,9 @@ func (h *updateHub) finish(err error) {
 	defer h.mu.Unlock()
 	h.running = false
 	if err != nil {
-		h.cur = updateProgress{Phase: selfupdate.PhaseFailed, Percent: -1, Message: "更新失败", Error: err.Error(), Version: h.cur.Version}
+		h.cur = updateProgress{Phase: selfupdate.PhaseFailed, Percent: -1, Message: "update failed", Error: err.Error(), Version: h.cur.Version}
 	} else {
-		h.cur = updateProgress{Phase: selfupdate.PhaseStaged, Percent: 100, Message: "新版本已就绪，正在重启…", Version: h.cur.Version}
+		h.cur = updateProgress{Phase: selfupdate.PhaseStaged, Percent: 100, Message: "new version is ready, restarting...", Version: h.cur.Version}
 	}
 	h.fanout(h.cur)
 }
@@ -232,7 +232,7 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 		out["disabled"] = true
 		out["has_update"] = false
 		out["comparable"] = false
-		out["reason"] = "在线更新已在本构建中禁用（不检查或下载远程版本）"
+		out["reason"] = "online updates are disabled in this build (no remote version checks or downloads)"
 		writeJSON(w, 200, out)
 		return
 	}
@@ -270,7 +270,7 @@ func (s *Server) updateCheck(w http.ResponseWriter, r *http.Request) {
 	if !comparable {
 		// 开发构建（dev / git describe 带后缀）没有可比较的版本号。放行只会
 		// 用正式版覆盖掉本地正在调试的二进制，所以直接不给更新。
-		out["reason"] = fmt.Sprintf("当前版本 %q 不是正式发布版本，已禁用一键更新", current)
+		out["reason"] = fmt.Sprintf("current version %q is not an official release; one-click update is disabled", current)
 	}
 	writeJSON(w, 200, out)
 }
@@ -283,7 +283,7 @@ func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 	// Online self-update is compiled out in this fork (selfupdate.Enabled):
 	// refuse before any download so no remote binary is ever staged.
 	if !selfupdate.Enabled {
-		writeErr(w, 403, "在线更新已在本构建中禁用")
+		writeErr(w, 403, "online updates are disabled in this build")
 		return
 	}
 	current := BuildVersion
@@ -297,15 +297,15 @@ func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 	}
 	cmp, comparable := selfupdate.CompareVersions(current, rel.TagName)
 	if !comparable {
-		writeErr(w, 400, fmt.Sprintf("当前版本 %q 不是正式发布版本，已禁用一键更新", current))
+		writeErr(w, 400, fmt.Sprintf("current version %q is not an official release; one-click update is disabled", current))
 		return
 	}
 	if cmp >= 0 {
-		writeErr(w, 400, fmt.Sprintf("当前已是最新版本 %s", current))
+		writeErr(w, 400, fmt.Sprintf("already on the latest version %s", current))
 		return
 	}
 	if !updHub.begin(rel.TagName) {
-		writeErr(w, 409, "已有一个更新正在进行中")
+		writeErr(w, 409, "an update is already in progress")
 		return
 	}
 
@@ -317,10 +317,10 @@ func (s *Server) updateApply(w http.ResponseWriter, r *http.Request) {
 		})
 		updHub.finish(err)
 		if err != nil {
-			log.Printf("[update] 更新失败：%v", err)
+			log.Printf("[update] update failed: %v", err)
 			return
 		}
-		log.Printf("[update] %s → %s 已暂存，即将退出以完成换装", current, rel.TagName)
+		log.Printf("[update] %s -> %s staged, exiting now to complete the swap", current, rel.TagName)
 		// 留一点时间把最后一条进度推给前端，再触发退出。
 		time.Sleep(1500 * time.Millisecond)
 		requestRestart()
@@ -335,18 +335,18 @@ func (s *Server) updateRollback(w http.ResponseWriter, r *http.Request) {
 	// (selfupdate.Enabled). There is never a staged backup to roll back to,
 	// so refuse rather than appear to offer a working control.
 	if !selfupdate.Enabled {
-		writeErr(w, 403, "在线更新已在本构建中禁用")
+		writeErr(w, 403, "online updates are disabled in this build")
 		return
 	}
 	if _, running := updHub.snapshot(); running {
-		writeErr(w, 409, "更新正在进行中，无法回滚")
+		writeErr(w, 409, "an update is in progress; cannot roll back")
 		return
 	}
 	if err := selfupdate.Rollback(); err != nil {
 		writeErr(w, 400, err.Error())
 		return
 	}
-	log.Printf("[update] 已手动回滚到上一版本，即将退出以完成切换")
+	log.Printf("[update] manually rolled back to the previous version, exiting now to complete the switch")
 	writeJSON(w, 202, map[string]any{"ok": true})
 	go func() {
 		time.Sleep(500 * time.Millisecond)
