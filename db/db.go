@@ -290,8 +290,14 @@ WHERE name='browser' AND command='npx'
 	if err := d.seedDefaultInterceptRulesV3(); err != nil {
 		return fmt.Errorf("seed intercept rules v3: %w", err)
 	}
+	if err := d.translateLegacyInterceptRuleText(); err != nil {
+		return fmt.Errorf("translate intercept rules: %w", err)
+	}
 	if err := d.seedDefaultAssetInterceptRules(); err != nil {
 		return fmt.Errorf("seed asset intercept rules: %w", err)
+	}
+	if err := d.translateLegacyAssetInterceptRuleText(); err != nil {
+		return fmt.Errorf("translate asset intercept rules: %w", err)
 	}
 	return nil
 }
@@ -323,6 +329,37 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 		}
 	}
 	return d.SetSetting("asset_intercept_default_rules_v1", "done")
+}
+
+// translateLegacyAssetInterceptRuleText rewrites the note of any built-in
+// asset-intercept rule still carrying its pre-i18n Chinese text to the current
+// English default, matched by the stable (kind, pattern) pair. One-time,
+// flag-guarded.
+func (d *DB) translateLegacyAssetInterceptRuleText() error {
+	if v, _, _ := d.GetSetting("asset_intercept_rules_i18n_v1"); v == "done" {
+		return nil
+	}
+	rules := []struct {
+		kind       string
+		pattern    string
+		legacyNote string
+		note       string
+	}{
+		{"fuzzy_domain", ".gov", "[内置] 政府网站 (.gov)", "[built-in] government site (.gov)"},
+		{"fuzzy_domain", ".gov.cn", "[内置] 政府网站 (.gov.cn)", "[built-in] government site (.gov.cn)"},
+		{"fuzzy_domain", ".edu", "[内置] 教育网站 (.edu)", "[built-in] education site (.edu)"},
+		{"fuzzy_domain", ".edu.cn", "[内置] 教育网站 (.edu.cn)", "[built-in] education site (.edu.cn)"},
+	}
+	for _, r := range rules {
+		if _, err := d.Exec(`
+UPDATE asset_intercept_rules SET note=$3
+WHERE kind=$1 AND pattern=$2 AND note=$4`,
+			r.kind, r.pattern, r.note, r.legacyNote,
+		); err != nil {
+			return fmt.Errorf("translate asset rule %q: %w", r.pattern, err)
+		}
+	}
+	return d.SetSetting("asset_intercept_rules_i18n_v1", "done")
 }
 
 // builtinSkillVisibility maps a shipped skill's directory name → the built-in
@@ -625,4 +662,55 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 		return fmt.Errorf("rule %q: %w", name, err)
 	}
 	return d.SetSetting("intercept_default_rules_v3", "done")
+}
+
+// translateLegacyInterceptRuleText rewrites the name and message of any
+// built-in intercept rule still carrying its pre-i18n Chinese text to the
+// current English default. Matched by `pattern` (a stable, untranslated
+// column) rather than by `name`, since the seed functions above already use
+// `name` as their own insert dedup key and an old DB's Chinese name would
+// otherwise never match it. Only rows whose current message is still exactly
+// the known legacy text are touched, so a user's own edits are left alone.
+// One-time, flag-guarded.
+func (d *DB) translateLegacyInterceptRuleText() error {
+	if v, _, _ := d.GetSetting("intercept_rules_i18n_v1"); v == "done" {
+		return nil
+	}
+	rules := []struct {
+		pattern    string
+		legacyName string
+		name       string
+		message    string
+	}{
+		{`\brm\s+-rf\b[^|\n&;]*`, "[内置] 递归强制删除 rm -rf", "[built-in] recursive force delete rm -rf", "recursive force-delete (rm -rf / rm --recursive) is forbidden; it can permanently damage the system or the target environment"},
+		{`\brm\b[^"'\n]{0,60}["'\s](/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/root)`, "[内置] 删除系统关键目录", "[built-in] delete a critical system directory", "deleting a critical system path is forbidden"},
+		{`\bmkfs\b`, "[内置] 磁盘格式化 mkfs", "[built-in] disk format mkfs", "formatting a disk (mkfs) is forbidden"},
+		{`\bdd\b[^|\n]{0,100}\bof=\s*/dev/[a-zA-Z]`, "[内置] 覆写磁盘设备 dd", "[built-in] overwrite a disk device with dd", "using dd to overwrite a disk device is forbidden"},
+		{`:\(\)\s*\{[^}]*:\|:`, "[内置] Fork 炸弹", "[built-in] fork bomb", "running a fork bomb is forbidden"},
+		{`\b(?:shutdown|reboot|halt|poweroff|init\s+[06])\b`, "[内置] 关机 / 重启", "[built-in] shutdown / reboot", "running a shutdown or reboot command is forbidden"},
+		{`\bkill\s+-9\s+-1\b|\bkillall\s+-9\b`, "[内置] 杀死全部进程", "[built-in] kill all processes", "kill -9 -1 or killall -9 (killing all processes) is forbidden"},
+		{`\b(?:shred|wipe)\b[^|\n]{0,80}/dev/[a-zA-Z]`, "[内置] 磁盘擦除 shred / wipe", "[built-in] disk wipe shred / wipe", "wiping a disk device with shred/wipe is forbidden"},
+		{`\biptables\s+(?:-F|--flush)\b|\bnft\s+flush\s+ruleset\b`, "[内置] 清空防火墙规则", "[built-in] flush firewall rules", "flushing firewall rules (iptables -F / nft flush) is forbidden"},
+		{`(?i)\bDROP\s+(?:DATABASE|TABLE|SCHEMA|INDEX|VIEW|TABLESPACE|USER|ROLE)\b`, "[内置] SQL DROP DATABASE / TABLE / SCHEMA", "[built-in] SQL DROP DATABASE / TABLE / SCHEMA", "running a DROP operation is forbidden; it can irreversibly destroy database objects"},
+		{`(?i)\bTRUNCATE\s+(?:TABLE\s+)?\w`, "[内置] SQL TRUNCATE", "[built-in] SQL TRUNCATE", "running TRUNCATE is forbidden; it can wipe all data from a table"},
+		{`(?i)\.(?:dropDatabase|dropCollection|drop)\s*\(`, "[内置] MongoDB drop / dropDatabase", "[built-in] MongoDB drop / dropDatabase", "running a MongoDB drop operation is forbidden"},
+		{`(?i)\b(?:FLUSHALL|FLUSHDB)\b`, "[内置] Redis FLUSHALL / FLUSHDB", "[built-in] Redis FLUSHALL / FLUSHDB", "running Redis FLUSHALL / FLUSHDB is forbidden; it can wipe all cached data"},
+		{`(?i)\bcurl\b[^|\n&;"]{0,300}(?:-X\s*DELETE|--request\s+DELETE|-XDELETE)|\bwget\b[^|\n&;"]{0,300}--method[=\s]+DELETE`, "[内置] curl / wget 发送 DELETE 请求", "[built-in] curl / wget sending a DELETE request", "sending an HTTP DELETE request via curl/wget is forbidden; it can delete data on the target system"},
+		{`(?i)\b(?:requests|httpx|aiohttp|urllib\.request)\.delete\s*\(|session\.delete\s*\(|client\.delete\s*\(`, "[内置] Python HTTP 客户端 DELETE（requests/httpx/aiohttp）", "[built-in] Python HTTP client DELETE (requests/httpx/aiohttp)", "sending a DELETE request with a Python HTTP client is forbidden"},
+		{`(?i)axios\.delete\s*\(|method\s*[:=]\s*['"]DELETE['"]`, "[内置] 脚本中声明 HTTP DELETE 方法（JS/通用）", "[built-in] a script declaring an HTTP DELETE method (JS/generic)", "declaring and sending an HTTP DELETE request in a script is forbidden"},
+		{`(?i)/(?:clear|wipe|flush|purge|truncate|drop|destroy|factory[-_]reset|reset[-_]all)(?:[/?#"'\s]|$)`, "[内置] 批量清空 / 清除接口路径", "[built-in] bulk-clear / purge endpoint path", "calling a bulk-clear or destructive endpoint (/clear /wipe /flush /purge, etc.) is forbidden"},
+		{`(?i)\b(rm\s+-rf\s+/|mkfs|dd\s+if=|:\(\)\s*\{|shutdown|reboot|>\s*/dev/sd)`, "[内置] 破坏性系统命令", "[built-in] destructive system command", "destructive command refused (rm -rf / / mkfs / dd / fork bomb / shutdown-reboot / overwriting a disk device)"},
+		{`(?i)(curl|wget|nc|ncat)\b[^|]*\b(\|\s*(curl|wget|nc))`, "[内置] 数据外泄管道", "[built-in] data exfiltration pipe", "suspected data-exfiltration pipe refused (command output piped out via curl/wget/nc)"},
+		{deleteEndpointPathPattern, "[内置] 删除类接口路径", "[built-in] delete-type endpoint path", "calling a delete-type endpoint (/delete /remove /unlink /erase, etc.) is forbidden regardless of HTTP method -- most apps' delete endpoints can be triggered via GET/POST too, and will genuinely delete target data just the same"},
+	}
+	for _, r := range rules {
+		if _, err := d.Exec(`
+UPDATE intercept_rules SET name=$2, message=$4
+WHERE pattern=$1 AND name=$3`,
+			r.pattern, r.name, r.legacyName, r.message,
+		); err != nil {
+			return fmt.Errorf("translate rule %q: %w", r.legacyName, err)
+		}
+	}
+	return d.SetSetting("intercept_rules_i18n_v1", "done")
 }

@@ -536,7 +536,7 @@ func (t *ToolSet) listAssets() actool.CoreTool {
 			"Available fields: domain (root/sub/service domain), root_domain, ip, url, page_title, icp, service_name, app_name, method (e.g. GET/POST), service_type (http|other), record_type (e.g. A/CNAME), technology (array, = fuzzy == exact), port/status_code/company_id (integers).\n"+
 			"Example: status_code>=400 AND technology=shiro ; (port==80 OR port==443) AND technology=nginx",
 		obj(map[string]any{
-			"dsl":    str(`DSL 查询表达式（语法/字段见工具描述）。未传 id/ids 时必须非空。`),
+			"dsl":    str(`DSL query expression (see the tool description for syntax/fields). Must be non-empty when id/ids are not given.`),
 			"type":   str("asset type filter: root_domain|ip|subdomain|app|service|endpoint (a separate field, can be combined with dsl; type alone is not enough to query, dsl is still required)"),
 			"id":     intp("fetch directly by a single asset id (optional, mutually exclusive with dsl/type)"),
 			"ids":    map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "fetch directly by multiple asset ids (optional, mutually exclusive with dsl/type)"},

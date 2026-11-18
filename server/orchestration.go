@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/Autumn-27/artex/agent"
 	"github.com/Autumn-27/artex/db"
@@ -499,13 +500,66 @@ func (s *Server) seedOrchestrationTools() {
 	s.reseedMainAgentPrompt()         // mainagent 提示词加入「目标达成后 add_intent 反问是否建目标」(一次性)
 	s.reseedPlannerPrompt()           // planner 提示词:重写「0 意图」正当理由 + 加量化验收核对(一次性)
 	s.reseedWorkerPrompt()            // worker 提示词:加否定结论证据门槛(一次性)
+	s.translateLegacyAgentPrompts()
 	s.seedReporterAgent()             // 预置「报告撰写」agent + 工具绑定 + finding 触发器(一次性)
 	s.upgradeReporterTriggerMessage() // 老库补迁移:让 reporter 回传 evidence_version(一次性)
+	s.translateLegacyReporterTriggerMessage()
 	s.seedFindingTrafficTools()       // 增加可选证据参数及只读证据工具，保留用户配置
 	s.seedFindingWorkflowTools()
 	// 注：pentest 的默认工具绑定无需迁移——BuiltinToolSeeds 在全新初始化时就把
 	// list_assets/insert_assets/report_finding/list_findings/list_companies 连同
 	// pentest 一起 seed 好了（项目尚无旧库，不做迁移）。
+	s.translateLegacyToolDescriptions() // old DB rows still carry the pre-i18n Chinese tool descriptions (一次性)
+}
+
+// translateLegacyToolDescriptions pushes every system tool's current code
+// description/schema into the DB, for any row whose description still
+// contains CJK text -- a DB that was seeded before the backend's i18n pass
+// never otherwise gets these, since SeedTool is first-insert-only. Reuses
+// RefreshToolDefaults, which preserves each tool's agent binding and enabled
+// flag. One-time, flag-guarded.
+func (s *Server) translateLegacyToolDescriptions() {
+	const flag = "tool_descriptions_i18n_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	var tools []actool.CoreTool
+	tools = append(tools, s.orchestrationTools()...)
+	tools = append(tools, s.platformTools()...)
+	tools = append(tools, s.findingRetestTools()...)
+	if tr := s.m.Traffic(); tr != nil {
+		tools = append(tools, tr.Tools()...)
+	}
+	for _, t := range tools {
+		if !containsCJK(t.Description()) {
+			continue
+		}
+		schema, _ := json.Marshal(t.InputSchema())
+		if err := s.m.pg.RefreshToolDefaults(t.Name(), t.Description(), schema); err != nil {
+			log.Printf("[tools] translate %s failed: %v", t.Name(), err)
+		}
+	}
+	for _, sd := range agent.BuiltinToolSeeds() {
+		if !containsCJK(sd.Desc) {
+			continue
+		}
+		schema, _ := json.Marshal(sd.Schema)
+		if err := s.m.pg.RefreshToolDefaults(sd.Key, sd.Desc, schema); err != nil {
+			log.Printf("[tools] translate %s failed: %v", sd.Key, err)
+		}
+	}
+	_ = s.m.pg.SetSetting(flag, "true")
+	log.Printf("[tools] translated legacy Chinese tool descriptions to the code's English default (one-time)")
+}
+
+// containsCJK reports whether s contains any CJK Unified Ideograph.
+func containsCJK(s string) bool {
+	for _, r := range s {
+		if unicode.Is(unicode.Han, r) {
+			return true
+		}
+	}
+	return false
 }
 
 // refreshBuiltinToolSchemas propagates code schema/description changes on the
@@ -684,6 +738,41 @@ func (s *Server) reseedWorkerPrompt() {
 	log.Printf("[prompts] appended a new default version of the worker prompt (collapsed context-lookup section to list_assets/list_findings, removed list_facts/node_detail/asset_neighbors, one-time)")
 }
 
+// translateLegacyAgentPrompts appends a new prompt version, switched to
+// current, for any built-in agent whose CURRENT prompt still contains CJK
+// text (the pre-i18n Chinese default) -- regardless of which version number
+// it's on, unlike the version-specific reseed* migrations above which only
+// match one exact prior template. Same mechanism as those: BuiltinPromptSeeds
+// + ResetPromptToDefault, which appends and keeps prior versions in history.
+// One-time, flag-guarded.
+func (s *Server) translateLegacyAgentPrompts() {
+	const flag = "agent_prompts_i18n_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+	seeds := agent.BuiltinPromptSeeds()
+	for _, key := range []string{"goals", "planner", "mainagent", "worker", "auto", "pentest"} {
+		a, err := s.m.pg.GetAgentByKey(key)
+		if err != nil || a == nil {
+			continue
+		}
+		tmpl := seeds[key]
+		if tmpl == "" {
+			continue
+		}
+		cur, err := s.m.pg.CurrentPrompt(a.ID)
+		if err != nil || !containsCJK(cur) {
+			continue
+		}
+		if _, err := s.m.pg.ResetPromptToDefault(a.ID, tmpl); err != nil {
+			log.Printf("[prompts] failed to translate the %s prompt: %v", key, err)
+			continue
+		}
+		log.Printf("[prompts] appended an English default version of the %s prompt (one-time)", key)
+	}
+}
+
 // reporterToolCallMessage 必须无条件要求先读一次 get_finding_traffic 再写报告。
 // 该工具是只读的、「不依赖捕获开关」,自动绑定关不关都能读到人工绑定的证据。若这里
 // 写成「启用自动绑定才读」,默认关闭配置下 reporter 就不会传 evidence_version,
@@ -725,6 +814,36 @@ func (s *Server) upgradeReporterTriggerMessage() {
 			return
 		}
 		log.Printf("[reporter] trigger message upgraded to read and pass back evidence_version")
+	}
+}
+
+// translateLegacyReporterTriggerMessage force-updates any reporter trigger
+// whose tool-call message still contains CJK text (the pre-i18n Chinese
+// default) to the current English code default. Unlike
+// upgradeReporterTriggerMessage, which only matches the exact old v1 literal,
+// this catches the intermediate Chinese version those DBs actually carry.
+// One-time, flag-guarded.
+func (s *Server) translateLegacyReporterTriggerMessage() {
+	const flag = "reporter_trigger_i18n_v1"
+	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
+		return
+	}
+	defer func() { _ = s.m.pg.SetSetting(flag, "true") }()
+	triggers, err := s.m.pg.ListTriggersFor("reporter")
+	if err != nil {
+		log.Printf("[reporter] failed to read triggers: %v", err)
+		return
+	}
+	for _, t := range triggers {
+		if !t.OnToolCall || !containsCJK(t.ToolCallMessage) {
+			continue
+		}
+		t.ToolCallMessage = reporterToolCallMessage
+		if err := s.m.pg.UpdateTrigger(t); err != nil {
+			log.Printf("[reporter] failed to translate the trigger message: %v", err)
+			return
+		}
+		log.Printf("[reporter] trigger message translated to English")
 	}
 }
 
