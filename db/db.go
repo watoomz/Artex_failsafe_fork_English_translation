@@ -336,7 +336,7 @@ ON CONFLICT DO NOTHING`, r.kind, r.pattern, r.note); err != nil {
 // English default, matched by the stable (kind, pattern) pair. One-time,
 // flag-guarded.
 func (d *DB) translateLegacyAssetInterceptRuleText() error {
-	if v, _, _ := d.GetSetting("asset_intercept_rules_i18n_v1"); v == "done" {
+	if v, _, _ := d.GetSetting("asset_intercept_rules_i18n_v2"); v == "done" {
 		return nil
 	}
 	rules := []struct {
@@ -359,7 +359,7 @@ WHERE kind=$1 AND pattern=$2 AND note=$4`,
 			return fmt.Errorf("translate asset rule %q: %w", r.pattern, err)
 		}
 	}
-	return d.SetSetting("asset_intercept_rules_i18n_v1", "done")
+	return d.SetSetting("asset_intercept_rules_i18n_v2", "done")
 }
 
 // builtinSkillVisibility maps a shipped skill's directory name → the built-in
@@ -673,7 +673,7 @@ WHERE NOT EXISTS (SELECT 1 FROM intercept_rules WHERE name = $1)`,
 // the known legacy text are touched, so a user's own edits are left alone.
 // One-time, flag-guarded.
 func (d *DB) translateLegacyInterceptRuleText() error {
-	if v, _, _ := d.GetSetting("intercept_rules_i18n_v1"); v == "done" {
+	if v, _, _ := d.GetSetting("intercept_rules_i18n_v2"); v == "done" {
 		return nil
 	}
 	rules := []struct {
@@ -682,7 +682,7 @@ func (d *DB) translateLegacyInterceptRuleText() error {
 		name       string
 		message    string
 	}{
-		{`\brm\s+-rf\b[^|\n&;]*`, "[内置] 递归强制删除 rm -rf", "[built-in] recursive force delete rm -rf", "recursive force-delete (rm -rf / rm --recursive) is forbidden; it can permanently damage the system or the target environment"},
+		{`(?i)\brm\b.{0,80}(?:-[a-z]*r[a-z]*f[a-z]*|-[a-z]*f[a-z]*r[a-z]*|--recursive|--no-preserve-root)`, "[内置] 递归强制删除 rm -rf", "[built-in] recursive force delete rm -rf", "recursive force-delete (rm -rf / rm --recursive) is forbidden; it can permanently damage the system or the target environment"},
 		{`\brm\b[^"'\n]{0,60}["'\s](/|/etc|/bin|/usr|/boot|/var|/lib|/sys|/proc|/dev|/sbin|/root)`, "[内置] 删除系统关键目录", "[built-in] delete a critical system directory", "deleting a critical system path is forbidden"},
 		{`\bmkfs\b`, "[内置] 磁盘格式化 mkfs", "[built-in] disk format mkfs", "formatting a disk (mkfs) is forbidden"},
 		{`\bdd\b[^|\n]{0,100}\bof=\s*/dev/[a-zA-Z]`, "[内置] 覆写磁盘设备 dd", "[built-in] overwrite a disk device with dd", "using dd to overwrite a disk device is forbidden"},
@@ -712,5 +712,5 @@ WHERE pattern=$1 AND name=$3`,
 			return fmt.Errorf("translate rule %q: %w", r.legacyName, err)
 		}
 	}
-	return d.SetSetting("intercept_rules_i18n_v1", "done")
+	return d.SetSetting("intercept_rules_i18n_v2", "done")
 }

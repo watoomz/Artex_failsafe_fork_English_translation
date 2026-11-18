@@ -519,9 +519,16 @@ func (s *Server) seedOrchestrationTools() {
 // RefreshToolDefaults, which preserves each tool's agent binding and enabled
 // flag. One-time, flag-guarded.
 func (s *Server) translateLegacyToolDescriptions() {
-	const flag = "tool_descriptions_i18n_v1"
+	const flag = "tool_descriptions_i18n_v2"
 	if v, _, _ := s.m.pg.GetSetting(flag); v == "true" {
 		return
+	}
+	// legacyCJK reports whether key's row in the DB still has a CJK description --
+	// checked against the DB, not the code, since the code default is already
+	// English post-translation and would otherwise never match.
+	legacyCJK := func(key string) bool {
+		row, err := s.m.pg.GetTool(key)
+		return err == nil && row != nil && containsCJK(row.Description)
 	}
 	var tools []actool.CoreTool
 	tools = append(tools, s.orchestrationTools()...)
@@ -531,7 +538,7 @@ func (s *Server) translateLegacyToolDescriptions() {
 		tools = append(tools, tr.Tools()...)
 	}
 	for _, t := range tools {
-		if !containsCJK(t.Description()) {
+		if !legacyCJK(t.Name()) {
 			continue
 		}
 		schema, _ := json.Marshal(t.InputSchema())
@@ -540,7 +547,7 @@ func (s *Server) translateLegacyToolDescriptions() {
 		}
 	}
 	for _, sd := range agent.BuiltinToolSeeds() {
-		if !containsCJK(sd.Desc) {
+		if !legacyCJK(sd.Key) {
 			continue
 		}
 		schema, _ := json.Marshal(sd.Schema)
