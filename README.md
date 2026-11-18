@@ -1,34 +1,36 @@
-# FailSafe ARTEX
+# ARTEX (FailSafe build, English translation)
 
 <p align="center">
-  <img src="assets/artex-failsafe-header.png" alt="ARTEX — a source-built FailSafe distribution" width="100%">
+  <img src="assets/artex-failsafe-header.png" alt="ARTEX — a source-built, English-translated distribution" width="100%">
 </p>
 
-A source-built, locally bound distribution of [ARTEX](https://github.com/RuoJi6/ARTEX),
-an open-source multi-agent security testing harness.
+A source-built, English-translated distribution of [ARTEX](https://github.com/RuoJi6/ARTEX),
+an open-source multi-agent security testing harness, based on the
+[FailSafe hardened build](https://github.com/failsafe-security/artex).
 
-This repository exists because the prebuilt `tomicdd/artex` Docker image was
-found to contain an unauthenticated command-execution backdoor in November 2026.
-This build is compiled from the audited `v0.3.15` source tag and keeps upstream's
-full runtime capabilities, including Node 22, Playwright, Chromium, and nmap.
-The compose file binds the console to localhost and does not publish the
-recording proxy.
+**What this fork adds on top of FailSafe's build:** the backend (Go), CLI
+scripts, and web frontend were almost entirely in Chinese (comments and
+user-facing strings). This fork translates all of it to English, with no
+logic changes — same behavior, same hardening, readable by English-speaking
+reviewers and contributors.
 
 > **Authorized testing only.** ARTEX runs an autonomous agent that can execute
 > shell commands and send network traffic. Use it only against systems you own
 > or have explicit written permission to test.
 
-## Managed ARTEX runs
+## Why the FailSafe build specifically
 
-FailSafe can host and run ARTEX safely for you using **GlassBreak**, our
-cyber-grade model. We handle the isolated runtime, scoping, evidence handling,
-and the operational controls that are easy to get wrong in a self-hosted
-deployment.
-
-If you want a managed run, contact us:
-
-- **Email:** [hello@getfailsafe.com](mailto:hello@getfailsafe.com)
-- **Contact form:** <https://getfailsafe.com/contact-us>
+In November 2026, public analysis found that prebuilt Docker images published
+under `tomicdd/artex` (and copies under `congdonglinux/artex`) contained an
+unauthenticated command-execution backdoor in `server/auth.go` — a hidden
+`verifyCaptcha` function that ran arbitrary shell commands supplied in the
+login request, before checking credentials. The backdoor was image-only; the
+GitHub source did not contain it. FailSafe's fork responds to that by building
+from source and never pulling an ARTEX image, with digest-pinned base images.
+This repository builds on that same source-built foundation. See
+[`UPSTREAM.md`](UPSTREAM.md) and
+[`audit/artex-v0.3.15-audit.md`](audit/artex-v0.3.15-audit.md) for the full
+provenance and audit trail.
 
 ## Quick start
 
@@ -66,11 +68,12 @@ Delete everything, including the database and ARTEX data:
 docker compose --env-file .env.safe -f docker-compose.safe.yml down -v
 ```
 
-## What is different from upstream
+## What is different from upstream ARTEX
 
 | Area | Upstream default | This build |
 |---|---|---|
 | Image | prebuilt `tomicdd/artex` (backdoored) | compiled from this source tree |
+| Language | Chinese comments/strings throughout | translated to English |
 | Runtime user | root | root (upstream parity) |
 | Console binding | `0.0.0.0:8787` | `127.0.0.1:8787` |
 | Recording proxy | published on `8788` | not published |
@@ -80,12 +83,13 @@ docker compose --env-file .env.safe -f docker-compose.safe.yml down -v
 | Self-update | points at upstream | compiled off; no remote check or download |
 | Base images | floating tags | pinned by digest |
 
-The API, UI, skills, browser MCP, and browser-driven recon are unchanged.
-Node, Playwright, the Playwright MCP/CLI, and Chromium are preinstalled;
-`nmap` raw scans and runtime `apt`/`npm -g` installs work because the container
-runs as root, as upstream does. The deployment hardening that remains is the
-loopback-only console, an unpublished proxy, `no-new-privileges`, a persisted
-JWT key, and digest-pinned base images.
+The API, UI, skills, browser MCP, and browser-driven recon are functionally
+unchanged from the FailSafe build. Node, Playwright, the Playwright MCP/CLI,
+and Chromium are preinstalled; `nmap` raw scans and runtime `apt`/`npm -g`
+installs work because the container runs as root, as upstream does. The
+deployment hardening that remains is the loopback-only console, an
+unpublished proxy, `no-new-privileges`, a persisted JWT key, and
+digest-pinned base images.
 
 ## Build without Docker
 
@@ -136,10 +140,13 @@ audit of this tag.
 
 Read [`UPSTREAM.md`](UPSTREAM.md) first. In short: review the upstream diff,
 rebuild, run `make verify`, update the audit report, and only then deploy.
+This repository tracks [`failsafe-security/artex`](https://github.com/failsafe-security/artex)
+for hardening and security fixes, and re-applies the translation on top of
+each pull.
 
 ## License and provenance
 
 ARTEX is AGPL-3.0. See [`LICENSE`](LICENSE) and
-[`UPSTREAM.md`](UPSTREAM.md). This fork's modifications are released under the
-same license. The upstream README is preserved as
-[`README.upstream.md`](README.upstream.md).
+[`UPSTREAM.md`](UPSTREAM.md). This fork's modifications (the English
+translation) are released under the same license. The upstream README is
+preserved as [`README.upstream.md`](README.upstream.md).
